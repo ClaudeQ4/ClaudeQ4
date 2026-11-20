@@ -1,0 +1,53 @@
+name: Build macOS (AU + VST3)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main, master ]
+
+jobs:
+  build:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Scarica JUCE 9.0.4 (se non presente)
+        run: |
+          if [ ! -f JUCE/CMakeLists.txt ]; then
+            git clone --depth 1 --branch 9.0.4 https://github.com/juce-framework/JUCE.git JUCE
+          fi
+
+      - name: Configura (universale arm64 + x86_64)
+        run: |
+          cmake -S . -B build -G Xcode \
+            -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=10.13
+
+      - name: Compila AU e VST3
+        run: |
+          cmake --build build --config Release --target ClaudeQ4_AU ClaudeQ4_VST3 -j 4
+
+      - name: Firma ad-hoc e raccogli i plug-in
+        run: |
+          mkdir -p out
+          AU=$(find build -name "Claude-Q 4.component" -maxdepth 6 | head -1)
+          V3=$(find build -name "Claude-Q 4.vst3" -maxdepth 6 | head -1)
+          cp -R "$AU" out/
+          cp -R "$V3" out/
+          codesign --force --deep -s - "out/Claude-Q 4.component"
+          codesign --force --deep -s - "out/Claude-Q 4.vst3"
+          lipo -archs "out/Claude-Q 4.component/Contents/MacOS/Claude-Q 4"
+          cd out && zip -qry ../Claude-Q4-macOS.zip .
+
+      - name: Valida l'AU (auval)
+        continue-on-error: true
+        run: |
+          mkdir -p ~/Library/Audio/Plug-Ins/Components
+          cp -R "out/Claude-Q 4.component" ~/Library/Audio/Plug-Ins/Components/
+          killall -9 AudioComponentRegistrar || true
+          auval -v aumf Clq4 Cldq
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Claude-Q4-macOS
+          path: Claude-Q4-macOS.zip
